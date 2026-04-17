@@ -19,17 +19,31 @@ playwright install chromium
 
 复制`SendKey`，填入到`monitor.py`中的`SERVERCHAN_SENDKEY`，保存后退出编辑。
 
-<img width="2062" height="588" alt="image" src="https://github.com/user-attachments/assets/38357f49-c81f-428d-bfaf-3d72310cb81d" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/38357f49-c81f-428d-bfaf-3d72310cb81d" alt="Server酱 SendKey 位置示意图" width="600"/>
+</p>
 
-4. 运行脚本
+3. 运行脚本
 ```bash
 python monitor.py
 ```
 首次使用会弹出浏览器，需要扫码登陆。
 
-<img width="880" height="234" alt="image" src="https://github.com/user-attachments/assets/8dc1f9b7-7d4c-4318-ac57-a44af57584e8" />
-
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/8dc1f9b7-7d4c-4318-ac57-a44af57584e8" alt="运行示例" width="500"/>
+</p>
 
 ### 方式二：OpenClaw
-https://clawhub.ai/songxf1024/scut-review-monitor
+```bash
+用clawhub安装这个skill：https://clawhub.ai/songxf1024/scut-review-monitor
+```
+
+```bash
+查一下我的盲审状态
+```
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/50417931-c78d-471a-ad91-4b24ff3f84d1" alt="OpenClaw 查询盲审状态示例" width="600"/>
+</p>
+
 
