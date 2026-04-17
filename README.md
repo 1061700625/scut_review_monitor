@@ -11,7 +11,17 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-2. 运行脚本
+2. Server酱通知
+> https://sct.ftqq.com/
+
+复制`SendKey`，填入到`monitor.py`中的`SERVERCHAN_SENDKEY`，保存后退出编辑。
+
+<img width="2062" height="588" alt="image" src="https://github.com/user-attachments/assets/38357f49-c81f-428d-bfaf-3d72310cb81d" />
+
+
+
+
+4. 运行脚本
 ```bash
 python monitor.py
 ```
