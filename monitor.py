@@ -12,11 +12,12 @@ import requests
 from lxml import etree
 from playwright.sync_api import sync_playwright
 
-
 # =========================
 # 可调参数
 # =========================
-PORTAL_URL = "https://yjsjw-443.webvpn.scut.edu.cn/"  # "https://yjsjw.scut.edu.cn/"
+PORTAL_URL = "https://yjsjw-443.webvpn.scut.edu.cn/"
+# "https://yjsjw.scut.edu.cn/"
+
 TARGET_URL = (
     f"{PORTAL_URL}psc/ps_9/EMPLOYEE/SA/c/"
     "SC_CUSTOM_MENU.SC_BS_PP_REC_COM.GBL"
@@ -25,6 +26,7 @@ TARGET_URL = (
     "&IsFolder=false"
     "&IgnoreParamTempl=FolderPath%2cIsFolder"
 )
+
 HOMEPAGE_REFERER = (
     f"{PORTAL_URL}psp/ps/EMPLOYEE/SA/s/"
     "WEBLIB_PTPP_SC.HOMEPAGE.FieldFormula.IScript_AppHP"
@@ -36,7 +38,6 @@ HOMEPAGE_REFERER = (
 SUCCESS_TEXT = "研究生教学教务管理系统"
 WATCH_XPATH = '//*[@id="SC_DGRD_PP_APY_SC_ZP_DESCR$0"]'
 COOKIE_FILE = "cookies.json"
-
 MONITOR_INTERVAL_SECONDS = 5 * 60
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -57,6 +58,7 @@ HEADERS = {
         "Chrome/143.0.0.0 Safari/537.36"
     ),
     "Referer": HOMEPAGE_REFERER,
+    "Connection": "close",
 }
 
 
@@ -218,7 +220,6 @@ def save_cookies(context, cookie_file: str = COOKIE_FILE) -> None:
 def load_cookies(session: requests.Session, cookie_file: str = COOKIE_FILE) -> None:
     with open(cookie_file, "r", encoding="utf-8") as f:
         cookies = json.load(f)
-
     for cookie in cookies:
         session.cookies.set(
             cookie["name"],
@@ -226,6 +227,12 @@ def load_cookies(session: requests.Session, cookie_file: str = COOKIE_FILE) -> N
             domain=cookie.get("domain"),
             path=cookie.get("path", "/"),
         )
+
+
+def rebuild_session(cookie_file: str = COOKIE_FILE) -> requests.Session:
+    session = requests.Session()
+    load_cookies(session, cookie_file=cookie_file)
+    return session
 
 
 # =========================
@@ -263,6 +270,7 @@ def is_session_invalid(resp: requests.Response, watched_text: Optional[str]) -> 
         return True
     if watched_text is None and ("登录" in body or "login" in body.lower()):
         return True
+
     return False
 
 
@@ -305,9 +313,11 @@ def handle_session_invalid(state: MonitorState, session: requests.Session) -> bo
         wait_for_manual_login(page)
         sync_cookies(context, session)
         save_cookies(context)
+
         state.session_invalid_notified = False
         print("已重新获取登录态，浏览器已关闭，继续监控。")
         return True
+
     except KeyboardInterrupt:
         raise
     except Exception as exc:
@@ -334,6 +344,7 @@ def monitor_loop(session: requests.Session, state: MonitorState) -> None:
     while not state.stop_event.is_set():
         try:
             watched_text, resp = fetch_page(session)
+
             if is_session_invalid(resp, watched_text):
                 ok = handle_session_invalid(state, session)
                 if not ok:
@@ -357,8 +368,29 @@ def monitor_loop(session: requests.Session, state: MonitorState) -> None:
                 send_notification(old_text, watched_text)
             else:
                 print("内容未变化。")
+
         except KeyboardInterrupt:
             raise
+
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            print(f"[监控] HTTP异常: {exc}")
+            traceback.print_exc()
+
+            if status_code is not None and 500 <= status_code < 600:
+                print(f"检测到 {status_code} 服务器异常，准备重建 Session。")
+                try:
+                    session.close()
+                except Exception:
+                    pass
+
+                try:
+                    session = rebuild_session()
+                    print("Session 重建成功，等待下轮重试。")
+                except Exception as rebuild_exc:
+                    print(f"Session 重建失败: {rebuild_exc}")
+                    traceback.print_exc()
+
         except Exception as exc:
             print(f"[监控] 异常: {exc}")
             traceback.print_exc()
@@ -366,7 +398,6 @@ def monitor_loop(session: requests.Session, state: MonitorState) -> None:
         interrupted = interruptible_wait(state.stop_event, MONITOR_INTERVAL_SECONDS)
         if interrupted:
             break
-
 
 # =========================
 # cookie 优先启动
@@ -379,6 +410,7 @@ def try_start_with_saved_cookie(state: MonitorState) -> bool:
     try:
         load_cookies(session)
         watched_text, resp = fetch_page(session)
+
         if is_session_invalid(resp, watched_text):
             print("检测到本地 cookie 已失效。")
             return False
@@ -390,6 +422,7 @@ def try_start_with_saved_cookie(state: MonitorState) -> bool:
 
         monitor_loop(session, state)
         return True
+
     except KeyboardInterrupt:
         raise
     except Exception as exc:
@@ -409,6 +442,7 @@ def main() -> None:
         return
 
     ensure_browser_installed()
+
     try:
         playwright, browser, context, page = build_browser()
         wait_for_manual_login(page)
