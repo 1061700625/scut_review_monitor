@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import subprocess
@@ -43,7 +44,16 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 NOTIFY_URL = "http://14.103.144.178:7790/send/friend"
 NOTIFY_TARGET = "1061700625"
-NOTIFY_KEY = "xxx"
+NOTIFY_KEY = "xxxx"
+
+# 登录二维码与图床
+QRCODE_SELECTOR = "#qrcodeQQLogin img"
+QRCODE_IMAGE_FILE = "login_qrcode.png"
+QRCODE_URL_FILE = "login_qrcode_url.txt"
+IMAGE_UPLOAD_API_URL = "https://img.scdn.io/api/v1.php"
+IMAGE_UPLOAD_OUTPUT_FORMAT = "png"
+IMAGE_UPLOAD_CDN_DOMAIN = "default"
+IMAGE_UPLOAD_TIMEOUT_SECONDS = 30
 
 # Server酱 Turbo
 # 发送地址格式为 https://sctapi.ftqq.com/<SendKey>.send
@@ -152,6 +162,67 @@ def send_session_invalid_notification(
 
 
 # =========================
+# 登录二维码与图床
+# =========================
+def extract_login_qrcode(page, image_file: str = QRCODE_IMAGE_FILE) -> str:
+    img = page.locator(QRCODE_SELECTOR).first
+    img.wait_for(state="attached", timeout=30000)
+    src = img.get_attribute("src")
+
+    if not src or not src.startswith("data:image/"):
+        raise RuntimeError("未获取到 base64 登录二维码。")
+
+    try:
+        _, encoded = src.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+    except Exception as exc:
+        raise RuntimeError("登录二维码 base64 解码失败。") from exc
+
+    with open(image_file, "wb") as f:
+        f.write(image_bytes)
+
+    print(f"已提取登录二维码图片: {image_file}")
+    return image_file
+
+
+def upload_image_to_img_host(
+    image_file: str,
+    url_file: str = QRCODE_URL_FILE,
+) -> str:
+    data = {"outputFormat": IMAGE_UPLOAD_OUTPUT_FORMAT}
+    if IMAGE_UPLOAD_CDN_DOMAIN:
+        data["cdn_domain"] = IMAGE_UPLOAD_CDN_DOMAIN
+
+    with open(image_file, "rb") as f:
+        resp = requests.post(
+            IMAGE_UPLOAD_API_URL,
+            files={"image": (os.path.basename(image_file), f)},
+            data=data,
+            timeout=IMAGE_UPLOAD_TIMEOUT_SECONDS,
+        )
+
+    resp.raise_for_status()
+
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"图床返回非 JSON 响应: {resp.text[:200]}") from exc
+
+    if not isinstance(payload, dict) or not payload.get("success"):
+        raise RuntimeError(f"图床上传失败: {payload}")
+
+    url = payload.get("url") or payload.get("data", {}).get("url")
+    if not url:
+        raise RuntimeError(f"图床返回中缺少 url: {payload}")
+
+    with open(url_file, "w", encoding="utf-8") as f:
+        f.write(url)
+
+    print(f"登录二维码图床地址: {url}")
+    return url
+
+
+# =========================
 # 浏览器安装检测
 # =========================
 def ensure_browser_installed() -> None:
@@ -192,6 +263,17 @@ def build_browser():
 def wait_for_manual_login(page) -> None:
     page.goto(PORTAL_URL, wait_until="domcontentloaded")
     print("请在浏览器中手动登录，出现“研究生教学教务管理系统”后会继续。")
+
+    try:
+        qrcode_file = extract_login_qrcode(page)
+        qrcode_url = upload_image_to_img_host(qrcode_file)
+        send_message(
+            f"教务系统登录二维码：\n{qrcode_url}",
+            title="教务系统登录二维码",
+        )
+    except Exception as exc:
+        print(f"提取或上传登录二维码失败: {exc}")
+
     page.wait_for_selector(f"text={SUCCESS_TEXT}", timeout=0)
     print("检测到登录成功。")
 
