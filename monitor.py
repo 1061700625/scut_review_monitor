@@ -41,10 +41,21 @@ WATCH_XPATH = '//*[@id="SC_DGRD_PP_APY_SC_ZP_DESCR$0"]'
 COOKIE_FILE = "cookies.json"
 MONITOR_INTERVAL_SECONDS = 5 * 60
 REQUEST_TIMEOUT_SECONDS = 30
+LOGIN_POLL_SECONDS = 2
+QRCODE_MAX_AGE_SECONDS = 55
+MAX_QRCODE_NOTIFY_COUNT = 5
+QRCODE_EXPIRED_KEYWORDS = (
+    "二维码已失效",
+    "二维码失效",
+    "二维码过期",
+    "请刷新二维码",
+    "expired",
+    "invalid",
+)
 
 NOTIFY_URL = "http://14.103.144.178:7790/send/friend"
 NOTIFY_TARGET = "1061700625"
-NOTIFY_KEY = "xxxx"
+NOTIFY_KEY = "lihua"
 
 # 登录二维码与图床
 QRCODE_SELECTOR = "#qrcodeQQLogin img"
@@ -221,6 +232,72 @@ def upload_image_to_img_host(
     print(f"登录二维码图床地址: {url}")
     return url
 
+def get_qrcode_src(page) -> Optional[str]:
+    try:
+        img = page.locator(QRCODE_SELECTOR).first
+        if img.count() == 0:
+            return None
+        return img.get_attribute("src")
+    except Exception:
+        return None
+
+
+def is_qrcode_expired(page) -> bool:
+    page_text = ""
+    try:
+        page_text = page.inner_text("body", timeout=2000) or ""
+    except Exception:
+        pass
+
+    lowered = page_text.lower()
+    return any(keyword.lower() in lowered for keyword in QRCODE_EXPIRED_KEYWORDS)
+
+
+def send_login_qrcode_notification(
+    page,
+    last_qrcode_src: Optional[str] = None,
+    qrcode_notify_count: int = 0,
+    qrcode_notify_muted: bool = False,
+) -> tuple[Optional[str], int, bool]:
+    current_src = get_qrcode_src(page)
+    if not current_src:
+        return last_qrcode_src, qrcode_notify_count, qrcode_notify_muted
+    if current_src == last_qrcode_src:
+        return last_qrcode_src, qrcode_notify_count, qrcode_notify_muted
+    if qrcode_notify_muted:
+        print("检测到新二维码，但已达到通知上限，跳过发送通知。")
+        return current_src, qrcode_notify_count, qrcode_notify_muted
+    qrcode_file = extract_login_qrcode(page)
+    qrcode_url = upload_image_to_img_host(qrcode_file)
+    send_message(
+        f"教务系统登录二维码：\n{qrcode_url}",
+        title="教务系统登录二维码",
+    )
+    qrcode_notify_count += 1
+    print(f"已发送第 {qrcode_notify_count} 次登录二维码通知。")
+    if qrcode_notify_count >= MAX_QRCODE_NOTIFY_COUNT:
+        qrcode_notify_muted = True
+        print("已达到二维码通知上限，后续二维码刷新将不再发送通知。")
+    return current_src, qrcode_notify_count, qrcode_notify_muted
+
+def refresh_login_page_and_qrcode(
+    page,
+    reason: str,
+    qrcode_notify_count: int,
+    qrcode_notify_muted: bool,
+) -> tuple[Optional[str], float, int, bool]:
+    print(f"检测到登录二维码需要刷新，原因: {reason}")
+    page.reload(wait_until="domcontentloaded", timeout=30000)
+    page.locator(QRCODE_SELECTOR).first.wait_for(state="attached", timeout=30000)
+    last_qrcode_src, qrcode_notify_count, qrcode_notify_muted = (
+        send_login_qrcode_notification(
+            page,
+            last_qrcode_src=None,
+            qrcode_notify_count=qrcode_notify_count,
+            qrcode_notify_muted=qrcode_notify_muted,
+        )
+    )
+    return last_qrcode_src, time.time(), qrcode_notify_count, qrcode_notify_muted
 
 # =========================
 # 浏览器安装检测
@@ -264,24 +341,69 @@ def wait_for_manual_login(page) -> None:
     page.goto(PORTAL_URL, wait_until="domcontentloaded")
     print("请在浏览器中手动登录，出现“研究生教学教务管理系统”后会继续。")
 
-    try:
-        qrcode_file = extract_login_qrcode(page)
-        qrcode_url = upload_image_to_img_host(qrcode_file)
-        send_message(
-            f"教务系统登录二维码：\n{qrcode_url}",
-            title="教务系统登录二维码",
+    last_qrcode_src = None
+    qrcode_sent_at = 0.0
+    qrcode_notify_count = 0
+    qrcode_notify_muted = False
+
+    page.locator(QRCODE_SELECTOR).first.wait_for(state="attached", timeout=30000)
+    last_qrcode_src, qrcode_notify_count, qrcode_notify_muted = (
+        send_login_qrcode_notification(
+            page,
+            last_qrcode_src,
+            qrcode_notify_count,
+            qrcode_notify_muted,
         )
-    except Exception as exc:
-        print(f"提取或上传登录二维码失败: {exc}")
+    )
+    qrcode_sent_at = time.time()
 
-    page.wait_for_selector(f"text={SUCCESS_TEXT}", timeout=0)
-    print("检测到登录成功。")
+    while True:
+        if page.locator(f"text={SUCCESS_TEXT}").count() > 0:
+            print("检测到登录成功。")
+            return
 
+        current_qrcode_src = get_qrcode_src(page)
+
+        if current_qrcode_src and current_qrcode_src != last_qrcode_src:
+            last_qrcode_src, qrcode_notify_count, qrcode_notify_muted = (
+                send_login_qrcode_notification(
+                    page,
+                    last_qrcode_src,
+                    qrcode_notify_count,
+                    qrcode_notify_muted,
+                )
+            )
+            qrcode_sent_at = time.time()
+
+        expired = is_qrcode_expired(page)
+        aged = (time.time() - qrcode_sent_at) >= QRCODE_MAX_AGE_SECONDS
+
+        if expired or aged:
+            reason = (
+                "页面提示二维码失效"
+                if expired
+                else "二维码超时未刷新"
+            )
+            (
+                last_qrcode_src,
+                qrcode_sent_at,
+                qrcode_notify_count,
+                qrcode_notify_muted,
+            ) = refresh_login_page_and_qrcode(
+                page,
+                reason,
+                qrcode_notify_count,
+                qrcode_notify_muted,
+            )
+            continue
+
+        page.wait_for_timeout(LOGIN_POLL_SECONDS * 1000)
 
 # =========================
 # cookie 相关
 # =========================
 def sync_cookies(context, session: requests.Session) -> None:
+    session.cookies.clear()
     cookies = context.cookies()
     for cookie in cookies:
         session.cookies.set(
@@ -290,7 +412,6 @@ def sync_cookies(context, session: requests.Session) -> None:
             domain=cookie.get("domain"),
             path=cookie.get("path", "/"),
         )
-
 
 def save_cookies(context, cookie_file: str = COOKIE_FILE) -> None:
     cookies = context.cookies()
@@ -396,6 +517,11 @@ def handle_session_invalid(state: MonitorState, session: requests.Session) -> bo
         sync_cookies(context, session)
         save_cookies(context)
 
+        send_message(
+            "教务系统重新登录成功，监控已恢复。",
+            title="教务系统重新登录成功",
+        )
+
         state.session_invalid_notified = False
         print("已重新获取登录态，浏览器已关闭，继续监控。")
         return True
@@ -417,7 +543,6 @@ def handle_session_invalid(state: MonitorState, session: requests.Session) -> bo
                 playwright.stop()
             except Exception:
                 pass
-
 
 # =========================
 # 监控主循环
