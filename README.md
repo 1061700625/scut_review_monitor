@@ -1,6 +1,9 @@
 # scut_blind_monitor
 华南理工大学论文盲审状态监控脚本
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/50e3d050-f26a-4200-bb52-8c9d3cf62fa9" alt="Server酱 SendKey 位置示意图" width="1024"/>
+</p>
 
 ## 使用方法
 ### 方式一：本地脚本
